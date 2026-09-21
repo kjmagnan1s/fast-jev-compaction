@@ -1,7 +1,7 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.0",
-  "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
+  "version": "0.3.1",
+  "description": "Verbatim Jev-guided pruning for Claude Code sessions. Never summarizes the main conversation.",
   "license": "MIT",
   "userConfig": {
     "apiKey": {
@@ -22,16 +22,28 @@
       "description": "Number of newest messages pinned from compaction.",
       "default": 6
     },
+    "compactAtTokens": {
+      "type": "number",
+      "title": "Prune at tokens",
+      "description": "Context size in tokens at which turn.complete prunes. 0 uses the compaction percentage instead.",
+      "default": 250000
+    },
     "compactAtPercent": {
       "type": "number",
       "title": "Compaction percentage",
-      "description": "Context percentage at which turn.complete requests compaction.",
+      "description": "Context percentage at which turn.complete prunes, used only when compactAtTokens is 0.",
       "default": 60
+    },
+    "retryAfterTokens": {
+      "type": "number",
+      "title": "Retry after tokens",
+      "description": "After a prune is skipped, how many tokens the context must grow before the next automatic try.",
+      "default": 50000
     },
     "minReductionRatio": {
       "type": "number",
       "title": "Minimum reduction ratio",
-      "description": "Minimum estimated character reduction required to replace history.",
+      "description": "Minimum estimated character reduction for an automatic prune. Below it the history is left as is; a typed /compact takes any reduction.",
       "default": 0.25
     },
     "maxStateTokens": {

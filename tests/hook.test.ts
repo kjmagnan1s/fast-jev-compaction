@@ -1,11 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  register,
   resolveHookConfig,
+  shouldPrune,
   summarize,
   toSessionMessages,
+  triggerTokens,
 } from '../hooks/fast-jev.ts';
 import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
 
@@ -53,7 +56,13 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({
+      compactAtTokens: 250_000,
+      compactAtPercent: 60,
+      retryAfterTokens: 50_000,
+      minReductionRatio: 0.25,
+      model: 'jev-latest',
+    });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
     ).toEqual({
@@ -62,7 +71,9 @@ describe('hook config', () => {
       maxStateTokens: 1000,
       model: 'jev-x',
       goal: 'g',
+      compactAtTokens: 250_000,
       compactAtPercent: 60,
+      retryAfterTokens: 50_000,
       minReductionRatio: 0.25,
     });
   });
@@ -145,5 +156,147 @@ describe('compactSession', () => {
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+});
+
+type Handler = (...args: never[]) => Promise<unknown>;
+type HostFetch = ReturnType<typeof jevFetch>;
+
+function registered(options: Record<string, unknown> = {}): Record<string, Handler> {
+  const handlers: Record<string, Handler> = {};
+  const on = (name: string, handler: Handler) => {
+    handlers[name] = handler;
+  };
+  register(on as never, options as never);
+  return handlers;
+}
+
+function host(fetch: HostFetch, context = { tokens: 0, window: 1_000_000 }) {
+  const logs: string[] = [];
+  let compactResult: unknown = { messages: [] };
+  const compact = vi.fn(async () => compactResult);
+  const $ = {
+    env: { get: async () => 'k' },
+    settings: { read: async () => ({}) },
+    ui: { log: (text: string) => logs.push(text), toast: (text: string) => logs.push(text) },
+    http: { fetch },
+    session: { usage: async () => ({ context }), compact },
+  };
+  return {
+    $,
+    logs,
+    compact,
+    context,
+    compactReturns(result: unknown) {
+      compactResult = result;
+    },
+  };
+}
+
+async function runCompact(
+  fetch: HostFetch,
+  event: Record<string, unknown>,
+): Promise<{ result: unknown; next: ReturnType<typeof vi.fn>; logs: string[] }> {
+  const handlers = registered({ preserveRecentMessages: 1 });
+  const { $, logs } = host(fetch);
+  const next = vi.fn(async () => ({ messages: 'built-in summary' }));
+  const result = await handlers['session.compact']!(
+    $ as never,
+    { messages: transcript(), ...event } as never,
+    next as never,
+  );
+  return { result, next, logs };
+}
+
+describe('session.compact never summarizes the main conversation', () => {
+  it('returns the pruned history when Jev clears the minimum', async () => {
+    const { result, next } = await runCompact(jevFetch(() => 0.1), { trigger: 'plugin' });
+    expect(next).not.toHaveBeenCalled();
+    expect((result as { messages: unknown[] }).messages).toHaveLength(3);
+  });
+
+  it('skips instead of summarizing when nothing can be pruned', async () => {
+    const { result, next, logs } = await runCompact(jevFetch(() => 0.9), { trigger: 'plugin' });
+    expect(next).not.toHaveBeenCalled();
+    expect(result).toEqual({ skip: expect.stringMatching(/^nothing to prune/) });
+    expect(logs.at(-1)).toMatch(/history left as is, no summary .*run \/handoff when ready$/);
+  });
+
+  it('skips a small automatic prune but applies it on a typed /compact', async () => {
+    const dropT2 = () => jevFetch((name) => (name.endsWith('t2') ? 0.1 : 0.9));
+    const auto = await runCompact(dropT2(), { trigger: 'plugin' });
+    expect(auto.result).toEqual({ skip: expect.stringMatching(/^below 25% minimum/) });
+    const manual = await runCompact(dropT2(), { trigger: 'manual' });
+    expect(manual.next).not.toHaveBeenCalled();
+    expect((manual.result as { messages: unknown[] }).messages).toHaveLength(5);
+  });
+
+  it('skips when Jev fails', async () => {
+    const failing = (async () => ({ status: 500, ok: false, text: 'x' })) as HostFetch;
+    const { result, next } = await runCompact(failing, { trigger: 'manual' });
+    expect(next).not.toHaveBeenCalled();
+    expect(result).toEqual({ skip: expect.stringMatching(/500/) });
+  });
+
+  it('keeps the built-in fallback for subagent transcripts', async () => {
+    const failing = (async () => ({ status: 500, ok: false, text: 'x' })) as HostFetch;
+    const { result, next } = await runCompact(failing, { trigger: 'auto', agentId: 'agent-1' });
+    expect(next).toHaveBeenCalledOnce();
+    expect(result).toEqual({ messages: 'built-in summary' });
+  });
+
+  it('never runs on precompute', async () => {
+    const bodies: string[] = [];
+    const { result, next } = await runCompact(jevFetch(() => 0.1, bodies), { trigger: 'precompute' });
+    expect(bodies).toHaveLength(0);
+    expect(next).not.toHaveBeenCalled();
+    expect(result).toEqual({ skip: expect.any(String) });
+  });
+
+  it('sends the text typed after /compact to Jev as the goal', async () => {
+    const bodies: string[] = [];
+    await runCompact(jevFetch(() => 0.1, bodies), {
+      trigger: 'manual',
+      instructions: ' keep the migration plan ',
+    });
+    expect(JSON.parse(bodies[0]!).state.goal).toBe('keep the migration plan');
+  });
+});
+
+describe('turn.complete trigger', () => {
+  it('uses the token trigger, or the percentage of the window when it is 0', () => {
+    expect(triggerTokens({ compactAtTokens: 250_000, compactAtPercent: 60 }, 1_000_000)).toBe(250_000);
+    expect(triggerTokens({ compactAtTokens: 0, compactAtPercent: 25 }, 200_000)).toBe(50_000);
+  });
+
+  it('waits for retryAfterTokens of growth after a skip', () => {
+    expect(shouldPrune(249_999, 250_000, undefined, 50_000)).toBe(false);
+    expect(shouldPrune(250_000, 250_000, undefined, 50_000)).toBe(true);
+    expect(shouldPrune(290_000, 250_000, 260_000, 50_000)).toBe(false);
+    expect(shouldPrune(310_000, 250_000, 260_000, 50_000)).toBe(true);
+  });
+
+  it('prunes above the trigger, backs off after a skip, and resets below it', async () => {
+    const handlers = registered();
+    const h = host(jevFetch(() => 0.1));
+    const turn = async (tokens: number) => {
+      h.context.tokens = tokens;
+      await handlers['turn.complete']!(h.$ as never, {} as never, (async (e: unknown) => e) as never);
+    };
+    await turn(200_000);
+    expect(h.compact).not.toHaveBeenCalled();
+    h.compactReturns({ skip: 'nothing to prune' });
+    await turn(260_000);
+    expect(h.compact).toHaveBeenCalledTimes(1);
+    await turn(290_000);
+    expect(h.compact).toHaveBeenCalledTimes(1);
+    await turn(310_000);
+    expect(h.compact).toHaveBeenCalledTimes(2);
+    await turn(100_000);
+    h.compactReturns({ messages: [] });
+    await turn(255_000);
+    expect(h.compact).toHaveBeenCalledTimes(3);
+    await turn(256_000);
+    expect(h.compact).toHaveBeenCalledTimes(4);
   });
 });

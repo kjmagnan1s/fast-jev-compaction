@@ -20,7 +20,9 @@ import type {
 } from '../src/types.js';
 
 const HOOK_DEFAULTS = {
+  compactAtTokens: 250_000,
   compactAtPercent: 60,
+  retryAfterTokens: 50_000,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
 };
@@ -42,7 +44,11 @@ export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetch
 
 export type HookConfig = CompactOptions & {
   apiKey?: string;
+  /** Context size that triggers a prune; 0 uses `compactAtPercent` instead. */
+  compactAtTokens: number;
   compactAtPercent: number;
+  /** After a skipped prune, how much the context must grow before the next try. */
+  retryAfterTokens: number;
   minReductionRatio: number;
   model: string;
 };
@@ -72,7 +78,9 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   }
   const config: HookConfig = {
     ...numbers,
+    compactAtTokens: optionNumber(options, 'compactAtTokens', HOOK_DEFAULTS.compactAtTokens),
     compactAtPercent: optionNumber(options, 'compactAtPercent', HOOK_DEFAULTS.compactAtPercent),
+    retryAfterTokens: optionNumber(options, 'retryAfterTokens', HOOK_DEFAULTS.retryAfterTokens),
     minReductionRatio: optionNumber(
       options,
       'minReductionRatio',
@@ -172,6 +180,30 @@ export async function compactSession(
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
+/** The context size, in tokens, at which `turn.complete` asks for a prune. */
+export function triggerTokens(
+  config: Pick<HookConfig, 'compactAtTokens' | 'compactAtPercent'>,
+  window: number,
+): number {
+  return config.compactAtTokens > 0
+    ? config.compactAtTokens
+    : Math.round((window * config.compactAtPercent) / 100);
+}
+
+/**
+ * Whether `turn.complete` asks for a prune: the context has reached the
+ * trigger and, after a skipped prune, has grown `retryAfterTokens` since.
+ */
+export function shouldPrune(
+  tokens: number,
+  threshold: number,
+  skippedAt: number | undefined,
+  retryAfterTokens: number,
+): boolean {
+  if (tokens < threshold) return false;
+  return skippedAt === undefined || tokens >= skippedAt + retryAfterTokens;
+}
+
 function percent(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
 }
@@ -259,21 +291,40 @@ function notify(
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
+  let skippedAt: number | undefined;
 
   on('session.compact', async ($, event, next) => {
+    // The main conversation is never summarized: when pruning can't help, it
+    // stays as it is. A subagent can't go on past a full context, so its
+    // transcripts keep the fallback to the built-in summary.
+    const subagent = event.agentId !== undefined;
+    const fallBack = (reason: string) => {
+      if (subagent) {
+        notify($, `fallback to built-in summary (${reason})`);
+        return next(event);
+      }
+      notify($, `history left as is, no summary (${reason}); run /handoff when ready`);
+      return { skip: reason };
+    };
+    if (event.trigger === 'precompute') return { skip: 'fast-jev-compaction prunes on demand only' };
     try {
-      const config = { ...configured, apiKey: await getApiKey($, configured) };
+      const instructions = event.instructions?.trim();
+      const config = {
+        ...configured,
+        ...(instructions ? { goal: instructions } : {}),
+        apiKey: await getApiKey($, configured),
+      };
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
       });
       for (const line of decisionLogLines(result)) $.ui.log(line);
-      if (reductionRatio(result) < config.minReductionRatio) {
-        notify(
-          $,
-          `fallback to built-in summary (below ${percent(config.minReductionRatio)} minimum: ${summarize(result)})`,
-        );
-        return next(event);
+      // A typed /compact takes whatever Jev found; automatic triggers need the minimum.
+      const minimum = event.trigger === 'manual' ? 0 : config.minReductionRatio;
+      const ratio = reductionRatio(result);
+      if (ratio <= 0) return fallBack(`nothing to prune: ${summarize(result)}`);
+      if (ratio < minimum) {
+        return fallBack(`below ${percent(minimum)} minimum: ${summarize(result)}`);
       }
       notify(
         $,
@@ -281,11 +332,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
       );
       return { messages };
     } catch (error) {
-      notify(
-        $,
-        `fallback to built-in summary (${error instanceof Error ? error.message : String(error)})`,
-      );
-      return next(event);
+      return fallBack(error instanceof Error ? error.message : String(error));
     }
   });
 
@@ -293,9 +340,16 @@ export const register: Register = (on: On, options: PluginOptions) => {
     if (compacting) return next(event);
     try {
       const { context } = await $.session.usage();
-      if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);
+      const tokens =
+        context.tokens ?? Math.round(((context.percent ?? 0) / 100) * context.window);
+      const threshold = triggerTokens(configured, context.window);
+      if (tokens < threshold) skippedAt = undefined;
+      if (!shouldPrune(tokens, threshold, skippedAt, configured.retryAfterTokens)) {
+        return next(event);
+      }
       compacting = true;
-      await $.session.compact();
+      const outcome = await $.session.compact();
+      skippedAt = outcome.skip !== undefined ? tokens : undefined;
     } catch (error) {
       $.ui.log(
         `auto-compact skipped (${error instanceof Error ? error.message : String(error)})`,

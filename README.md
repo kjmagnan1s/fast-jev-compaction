@@ -5,6 +5,30 @@ every tool call and result is scored in one fast request, stale ones are
 dropped or truncated, everything kept stays verbatim. Also usable as an npm
 library.
 
+## This fork: prune only
+
+This fork of [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction)
+never summarizes the main conversation. The plugin prunes, or it leaves the
+history as it is. The library in `src/` is unchanged; the differences are all
+in `hooks/fast-jev.ts`:
+
+- When Jev fails, finds nothing to drop, or can't reach `minReductionRatio` on
+  an automatic prune, the hook skips the compaction instead of handing it to
+  Claude Code's built-in summary. The toast suggests `/handoff`.
+- A typed `/compact` applies any reduction Jev finds, and the text typed after
+  it becomes Jev's `goal`.
+- The automatic trigger is a token count, `compactAtTokens` (250k by default),
+  so it means the same thing on every model. Set it to 0 to use
+  `compactAtPercent` again.
+- After a skip, the automatic trigger waits until the context grows by
+  `retryAfterTokens` (50k by default) before it asks Jev again.
+- `precompute` compactions are skipped. Subagent transcripts keep the upstream
+  fallback to the built-in summary, because a subagent can't go on past a full
+  context.
+
+To get a built-in summary anyway, disable the plugin with `/plugin`, then run
+`/compact`.
+
 ## What and why
 
 Most context compaction asks an LLM to summarize old turns. A summary is

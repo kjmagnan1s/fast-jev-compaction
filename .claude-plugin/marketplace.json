@@ -8,8 +8,8 @@
     {
       "name": "fast-jev-compaction",
       "source": "./",
-      "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
-      "version": "0.3.0",
+      "description": "Verbatim Jev-guided pruning for Claude Code sessions. Never summarizes the main conversation.",
+      "version": "0.3.1",
       "license": "MIT"
     }
   ]

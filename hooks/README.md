@@ -50,7 +50,9 @@ The plugin declares these `userConfig` values in
 | --- | ---: |
 | `keepThreshold` | `0.5` |
 | `preserveRecentMessages` | `6` |
+| `compactAtTokens` | `250000` |
 | `compactAtPercent` | `60` |
+| `retryAfterTokens` | `50000` |
 | `minReductionRatio` | `0.25` |
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
@@ -61,18 +63,23 @@ The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended
 development setup.
 
-Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
-`model` is passed straight to the library; see the root README for what they
+Every option except `apiKey`, `compactAtTokens`, `compactAtPercent`,
+`retryAfterTokens`, `minReductionRatio` and `model` is passed straight to the
+library; see the root README for what they
 do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
 the response is malformed, the key is unavailable, the history cannot be
 fitted into the state budget, or the estimated reduction is below
-`minReductionRatio`, the hook logs a fallback and delegates to Claude Code's
-built-in compaction. The outcome is shown as a toast and logged with the
+`minReductionRatio` on an automatic prune, the hook leaves the main
+conversation as it is and returns a skip; it never delegates to Claude Code's
+built-in compaction. A typed `/compact` applies any reduction, and its text
+becomes Jev's goal. Subagent transcripts still fall back to the built-in
+compaction. The outcome is shown as a toast and logged with the
 reduction, per-reason counts, state size and request count; a per-call
 `decisions:` line with both probabilities is logged for diagnosis. The
-`turn.complete` hook requests
-compaction when `context.percent` reaches `compactAtPercent`, with an
-in-flight guard.
+`turn.complete` hook requests a prune when the context reaches
+`compactAtTokens` (or `compactAtPercent` of the window when that is 0), with
+an in-flight guard. After a skip it waits for `retryAfterTokens` of growth
+before it tries again.
 
 ## Scope and caveat
 
