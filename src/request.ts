@@ -1,7 +1,7 @@
 import type { JevAnswer, JevQuestions, JevResponse, JevState } from './types.js';
 
 export const SYSTEM_ONE_URL = 'https://api.typesafe.ai/v1/systemone';
-export const DEFAULT_MODEL = 'jev-latest';
+export const DEFAULT_MODEL = 'jev-1.14.0';
 
 export interface JevRequest {
   url: string;
@@ -26,6 +26,9 @@ export function buildJevRequest(
     headers: {
       authorization: `Bearer ${params.apiKey}`,
       'content-type': 'application/json',
+      // Experimental flags (TypeSafe, 2026-10-14): image input and 262k context.
+      'TypeSafe-Danger-Zone-Images': 'true',
+      'TypeSafe-Danger-Zone-Long-Context': 'true',
     },
     body: JSON.stringify({
       model: params.model ?? DEFAULT_MODEL,
