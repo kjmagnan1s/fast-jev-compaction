@@ -54,10 +54,10 @@ The plugin declares these `userConfig` values in
 | `compactAtPercent` | `60` |
 | `retryAfterTokens` | `50000` |
 | `minReductionRatio` | `0.25` |
-| `maxStateTokens` | `25000` |
-| `maxRequestTokens` | `30000` |
+| `maxStateTokens` | `45000` |
+| `maxRequestTokens` | `60000` |
 | `truncateHeadChars` | `300` |
-| `model` | `jev-latest` |
+| `model` | `jev-1.14.0` |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended

@@ -1,6 +1,6 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Verbatim Jev-guided pruning for Claude Code sessions. Never summarizes the main conversation.",
   "license": "MIT",
   "userConfig": {
@@ -26,7 +26,7 @@
       "type": "number",
       "title": "Prune at tokens",
       "description": "Context size in tokens at which turn.complete prunes. 0 uses the compaction percentage instead.",
-      "default": 250000
+      "default": 450000
     },
     "compactAtPercent": {
       "type": "number",
@@ -56,7 +56,7 @@
       "type": "number",
       "title": "Maximum Jev request tokens",
       "description": "Estimated token budget for state plus questions in one Jev request.",
-      "default": 30000
+      "default": 60000
     },
     "truncateHeadChars": {
       "type": "number",
@@ -68,7 +68,7 @@
       "type": "string",
       "title": "Jev model",
       "description": "TypeSafe Jev model name.",
-      "default": "jev-latest"
+      "default": "jev-1.14.0"
     }
   }
 }

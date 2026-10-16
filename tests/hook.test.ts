@@ -61,7 +61,7 @@ describe('hook config', () => {
       compactAtPercent: 60,
       retryAfterTokens: 50_000,
       minReductionRatio: 0.25,
-      model: 'jev-latest',
+      model: 'jev-1.14.0',
     });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),

@@ -76,8 +76,8 @@ describe('options', () => {
     expect(resolveOptions()).toMatchObject({
       keepThreshold: 0.5,
       preserveRecentMessages: 6,
-      maxStateTokens: 25_000,
-      maxRequestTokens: 30_000,
+      maxStateTokens: 45_000,
+      maxRequestTokens: 60_000,
       truncateHeadChars: 300,
     });
     expect(resolveOptions({
@@ -396,8 +396,10 @@ describe('HTTP client', () => {
     });
     expect(request.url).toBe('https://api.typesafe.ai/v1/systemone');
     expect(request.headers.authorization).toBe('Bearer k');
+    expect(request.headers['TypeSafe-Danger-Zone-Images']).toBe('true');
+    expect(request.headers['TypeSafe-Danger-Zone-Long-Context']).toBe('true');
     expect(JSON.parse(request.body)).toEqual({
-      model: 'jev-latest',
+      model: 'jev-1.14.0',
       state: { a: 1 },
       questions: { q: { type: 'noul', instructions: 'x' } },
     });

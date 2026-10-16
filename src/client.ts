@@ -4,7 +4,7 @@ import type { JevAsker, JevQuestions, JevResponse, JevState } from './types.js';
 export interface JevClientOptions {
   /** Defaults to `process.env.TYPESAFE_API_KEY`. */
   apiKey?: string;
-  /** Defaults to `jev-latest`. */
+  /** Defaults to `jev-1.14.0`. */
   model?: string;
   /** Defaults to the System One endpoint. */
   baseUrl?: string;

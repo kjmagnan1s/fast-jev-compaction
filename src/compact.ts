@@ -18,8 +18,11 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   goal: '',
   keepThreshold: 0.5,
   preserveRecentMessages: 6,
-  maxStateTokens: 25_000,
-  maxRequestTokens: 30_000,
+  // Sized for Jev 1.14 with TypeSafe-Danger-Zone-Long-Context on: the state and
+  // all questions usually fit one request. Kept well under ~50k-64k per
+  // request because Jev's yes/no accuracy drops on longer inputs.
+  maxStateTokens: 45_000,
+  maxRequestTokens: 60_000,
   truncateHeadChars: 300,
 };
 
